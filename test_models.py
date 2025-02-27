@@ -5,6 +5,8 @@ import sys
 import subprocess
 import time
 import pandas as pd
+import re
+import traceback
 from datetime import datetime
 import shutil
 import argparse
@@ -72,8 +74,21 @@ def run_model_test(model_name):
             import yaml
             config = yaml.safe_load(f)
 
-        # Use the FULL model name including tag
-        config['model']['name'] = model_name  # Don't split, use complete name
+        # Store original model name (for result matching)
+        original_model_name = model_name
+
+        # Adjust the model name format for Ollama
+        # Some models need the tag removed to work properly
+        if ":" in model_name:
+            base_model = model_name.split(':')[0]
+
+            # Use simplified name for models that need it
+            if base_model in ["phi3", "deepseek-r1", "smallthinker", "openthinker"]:
+                model_name = base_model
+                logger.info(f"Using simplified model name for Ollama: {model_name}")
+
+        # Update the config with possibly adjusted name
+        config['model']['name'] = model_name
 
         # Write the updated config back
         with open(CONFIG_PATH, 'w') as f:
@@ -86,11 +101,17 @@ def run_model_test(model_name):
 
         # Run the model playground with the updated config
         cmd = ["python", "open_source_examples/model_playground.py", DATA_PATH]
-        subprocess.run(cmd, check=True)
-        return True
+        try:
+            subprocess.run(cmd, check=True)
+            return True, original_model_name
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error running model_playground.py: {e}")
+            # Continue despite error - we might still have partial results
+            return True, original_model_name
     except Exception as e:
-        logger.error(f"Error running model {model_name}: {e}")
-        return False
+        logger.error(f"Error in run_model_test: {e}")
+        logger.error(traceback.format_exc())
+        return False, model_name
 
 def run_conversation_evaluation():
     """Run conversation clustering evaluation."""
@@ -99,15 +120,23 @@ def run_conversation_evaluation():
         cmd = ["python", "conversation_metrics.py", f"data/groups/{COMMUNITY}"]
         subprocess.run(cmd, check=True)
 
-        # Find the metrics file
-        metrics_path = os.path.join(f"data/groups/{COMMUNITY}", f"metrics_conversations_{COMMUNITY}.csv")
-        if os.path.exists(metrics_path):
-            return pd.read_csv(metrics_path)
-        else:
-            logger.error(f"Metrics file not found: {metrics_path}")
+        # Find the most recent metrics file
+        metrics_files = [f for f in os.listdir(f"data/groups/{COMMUNITY}")
+                        if f.startswith(f"metrics_conversations_{COMMUNITY}")]
+
+        if not metrics_files:
+            logger.error("No conversation metrics file found")
             return None
+
+        latest_file = max(metrics_files,
+                         key=lambda x: os.path.getmtime(os.path.join(f"data/groups/{COMMUNITY}", x)))
+        metrics_path = os.path.join(f"data/groups/{COMMUNITY}", latest_file)
+
+        logger.info(f"Using conversation metrics from: {latest_file}")
+        return pd.read_csv(metrics_path)
     except Exception as e:
         logger.error(f"Error running conversation evaluation: {e}")
+        logger.error(traceback.format_exc())
         return None
 
 def run_spam_evaluation():
@@ -135,9 +164,11 @@ def run_spam_evaluation():
                          key=lambda x: os.path.getmtime(os.path.join(f"data/groups/{COMMUNITY}", x)))
         metrics_path = os.path.join(f"data/groups/{COMMUNITY}", latest_file)
 
+        logger.info(f"Using spam metrics from: {latest_file}")
         return pd.read_csv(metrics_path)
     except Exception as e:
         logger.error(f"Error running spam evaluation: {e}")
+        logger.error(traceback.format_exc())
         return None
 
 def run_topic_evaluation():
@@ -164,52 +195,188 @@ def run_topic_evaluation():
                          key=lambda x: os.path.getmtime(os.path.join(f"data/groups/{COMMUNITY}", x)))
         metrics_path = os.path.join(f"data/groups/{COMMUNITY}", latest_file)
 
+        logger.info(f"Using topic metrics from: {latest_file}")
         return pd.read_csv(metrics_path)
     except Exception as e:
         logger.error(f"Error running topic evaluation: {e}")
+        logger.error(traceback.format_exc())
         return None
 
 def combine_results(model_name, conversation_df, spam_df, topic_df):
     """Combine results from all evaluations for a model."""
     results = {"model": model_name}
 
-    # Clean model name for matching - try multiple formats
-    base_model_name = model_name.split(':')[0]
-    alt_model_name = model_name.replace(':', '-')  # Some models use this format
+    # Get timestamp from current run for matching
+    current_timestamp = datetime.now().strftime('%H%M%S')
+    today_date = datetime.now().strftime('%Y%m%d')
 
-    # Extract conversation metrics
+    # Clean model name for matching - try all possible formats
+    base_model_name = model_name.split(':')[0] if ':' in model_name else model_name
+    alt_model_name = model_name.replace(':', '-')  # Format with hyphen
+    all_name_patterns = [
+        model_name, base_model_name, alt_model_name,
+        model_name.lower(), base_model_name.lower(), alt_model_name.lower()
+    ]
+
+    # Look for recent files in the data directory to extract timestamp
+    data_dir = f"data/groups/{COMMUNITY}"
+    try:
+        recent_labels = [
+            f for f in os.listdir(data_dir)
+            if f.startswith(f"labels_{today_date}") and
+               any(pattern in f for pattern in all_name_patterns)
+        ]
+
+        if recent_labels:
+            # Extract the timestamp from the most recent file
+            try:
+                most_recent = max(recent_labels, key=lambda x: os.path.getmtime(os.path.join(data_dir, x)))
+                timestamp_match = re.search(r'_(\d{8})_(\d{6})_', most_recent)
+                if timestamp_match:
+                    current_timestamp = timestamp_match.group(2)
+                    logger.info(f"Found timestamp {current_timestamp} for matching {model_name}")
+            except Exception as e:
+                logger.warning(f"Couldn't extract timestamp from recent files: {e}")
+    except Exception as e:
+        logger.warning(f"Error scanning for recent label files: {e}")
+
+    # Add timestamp to name patterns for matching
+    all_name_patterns.append(current_timestamp)
+
+    # Log what we're looking for
+    logger.info(f"Searching for metrics using patterns: {all_name_patterns}")
+
+    # Extract conversation metrics with enhanced matching
     if conversation_df is not None:
         try:
-            # Try multiple possible model name formats
+            logger.info(f"Conversation DataFrame columns: {conversation_df.columns.tolist()}")
+
             model_conv_results = None
-            if 'model' in conversation_df.columns:
-                if conversation_df['model'].dtype == 'object':
-                    for name_pattern in [model_name, base_model_name, alt_model_name]:
-                        matches = conversation_df[conversation_df['model'].str.contains(name_pattern, case=False, na=False)]
+
+            # 1. Try string match on model column if it exists
+            if 'model' in conversation_df.columns and pd.api.types.is_string_dtype(conversation_df['model']):
+                for name_pattern in all_name_patterns:
+                    matches = conversation_df[conversation_df['model'].str.contains(str(name_pattern), case=False, na=False, regex=False)]
+                    if not matches.empty:
+                        model_conv_results = matches
+                        logger.info(f"Matched on model column with pattern: {name_pattern}")
+                        break
+
+            # 2. Try exact match on numeric model column (might be timestamp)
+            if model_conv_results is None and 'model' in conversation_df.columns and pd.api.types.is_numeric_dtype(conversation_df['model']):
+                for name_pattern in all_name_patterns:
+                    if str(name_pattern).isdigit():
+                        matches = conversation_df[conversation_df['model'] == int(name_pattern)]
                         if not matches.empty:
                             model_conv_results = matches
+                            logger.info(f"Matched on numeric model column with value: {name_pattern}")
                             break
-                else:
-                    # Handle numeric model column - they might be timestamps
-                    for col in conversation_df.columns:
-                        if 'label_file' in col and conversation_df[col].dtype == 'object':
-                            for name_pattern in [model_name, base_model_name, alt_model_name]:
-                                matches = conversation_df[conversation_df[col].str.contains(name_pattern, case=False, na=False)]
-                                if not matches.empty:
-                                    model_conv_results = matches
-                                    break
 
+            # 3. Try matching on label_file column
+            if model_conv_results is None:
+                for col in conversation_df.columns:
+                    if 'file' in col.lower() and pd.api.types.is_string_dtype(conversation_df[col]):
+                        for name_pattern in all_name_patterns:
+                            matches = conversation_df[conversation_df[col].str.contains(str(name_pattern), case=False, na=False, regex=False)]
+                            if not matches.empty:
+                                model_conv_results = matches
+                                logger.info(f"Matched on {col} column with pattern: {name_pattern}")
+                                break
+
+            # Extract metrics if we found a match
             if model_conv_results is not None and not model_conv_results.empty:
                 if 'ari' in model_conv_results.columns:
-                    results["ari_score"] = model_conv_results['ari'].values[0]
+                    results["ari_score"] = float(model_conv_results['ari'].iloc[0])
+                    logger.info(f"Found ARI score: {results['ari_score']}")
                 if 'n_messages' in model_conv_results.columns:
-                    results["messages_processed"] = model_conv_results['n_messages'].values[0]
+                    results["messages_processed"] = int(model_conv_results['n_messages'].iloc[0])
+            else:
+                logger.warning(f"No conversation metrics found for model: {model_name}")
         except Exception as e:
             logger.warning(f"Error extracting conversation metrics: {e}")
+            logger.warning(traceback.format_exc())
 
-    # Add similar robust handling for spam and topic metrics
-    # ...
+    # Extract spam detection metrics
+    if spam_df is not None:
+        try:
+            logger.info(f"Spam DataFrame columns: {spam_df.columns.tolist()}")
 
+            model_spam_results = None
+
+            # Try same matching strategies as above
+            # 1. String model column
+            if 'model' in spam_df.columns and pd.api.types.is_string_dtype(spam_df['model']):
+                for name_pattern in all_name_patterns:
+                    matches = spam_df[spam_df['model'].str.contains(str(name_pattern), case=False, na=False, regex=False)]
+                    if not matches.empty:
+                        model_spam_results = matches
+                        break
+
+            # 2. Numeric model column
+            if model_spam_results is None and 'model' in spam_df.columns and pd.api.types.is_numeric_dtype(spam_df['model']):
+                for name_pattern in all_name_patterns:
+                    if str(name_pattern).isdigit():
+                        matches = spam_df[spam_df['model'] == int(name_pattern)]
+                        if not matches.empty:
+                            model_spam_results = matches
+                            break
+
+            # 3. Label file column
+            if model_spam_results is None:
+                for col in spam_df.columns:
+                    if 'file' in col.lower() and pd.api.types.is_string_dtype(spam_df[col]):
+                        for name_pattern in all_name_patterns:
+                            matches = spam_df[spam_df[col].str.contains(str(name_pattern), case=False, na=False, regex=False)]
+                            if not matches.empty:
+                                model_spam_results = matches
+                                break
+
+            # Extract metrics
+            if model_spam_results is not None and not model_spam_results.empty:
+                metrics_to_extract = ['accuracy', 'precision', 'recall', 'f1']
+                for metric in metrics_to_extract:
+                    if metric in model_spam_results.columns:
+                        # Handle NaN values
+                        value = model_spam_results[metric].iloc[0]
+                        if pd.notnull(value):
+                            results[f"spam_{metric}"] = float(value)
+        except Exception as e:
+            logger.warning(f"Error extracting spam metrics: {e}")
+            logger.warning(traceback.format_exc())
+
+    # Extract topic evaluation metrics
+    if topic_df is not None:
+        try:
+            logger.info(f"Topic DataFrame columns: {topic_df.columns.tolist()}")
+
+            # Find AVERAGE scores across all topics
+            model_topic_results = None
+
+            # First try to find the model by name
+            if 'model' in topic_df.columns and pd.api.types.is_string_dtype(topic_df['model']):
+                for name_pattern in all_name_patterns:
+                    matches = topic_df[
+                        (topic_df['model'].str.contains(str(name_pattern), case=False, na=False, regex=False)) &
+                        (topic_df['topic'] == 'AVERAGE')
+                    ]
+                    if not matches.empty:
+                        model_topic_results = matches
+                        break
+
+            # Extract topic metrics
+            if model_topic_results is not None and not model_topic_results.empty:
+                metrics_to_extract = ['information_density', 'redundancy', 'relevance', 'efficiency', 'overall']
+                for metric in metrics_to_extract:
+                    if metric in model_topic_results.columns:
+                        value = model_topic_results[metric].iloc[0]
+                        if pd.notnull(value):
+                            results[f"topic_{metric}"] = float(value)
+        except Exception as e:
+            logger.warning(f"Error extracting topic metrics: {e}")
+            logger.warning(traceback.format_exc())
+
+    # Log the results we found
+    logger.info(f"Combined results for {model_name}: {results}")
     return results
 
 def main():
@@ -218,7 +385,11 @@ def main():
     parser.add_argument("--models", nargs='+', help="Specific models to test")
     parser.add_argument("--primary-only", action="store_true", help="Only test primary recommended models")
     parser.add_argument("--alternative-only", action="store_true", help="Only test alternative models")
+    parser.add_argument("--debug", action="store_true", help="Print more diagnostic information")
     args = parser.parse_args()
+
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
 
     if not check_ollama_running():
         sys.exit(1)
@@ -244,58 +415,77 @@ def main():
     for model in models_to_test:
         logger.info(f"\n{'='*60}\nTesting model: {model}\n{'='*60}")
 
-        if pull_model(model) and run_model_test(model):
-            # Run all three evaluations
-            conversation_results = run_conversation_evaluation()
-            time.sleep(1)  # Brief pause between evaluations
+        try:
+            if pull_model(model):
+                success, model_name_used = run_model_test(model)
+                if success:
+                    # Run all three evaluations
+                    conversation_results = run_conversation_evaluation()
+                    if args.debug and conversation_results is not None:
+                        logger.debug(f"Conversation results sample:\n{conversation_results.head()}")
+                    time.sleep(1)  # Brief pause
 
-            spam_results = run_spam_evaluation()
-            time.sleep(1)
+                    spam_results = run_spam_evaluation()
+                    if args.debug and spam_results is not None:
+                        logger.debug(f"Spam results sample:\n{spam_results.head()}")
+                    time.sleep(1)
 
-            topic_results = run_topic_evaluation()
+                    topic_results = run_topic_evaluation()
+                    if args.debug and topic_results is not None:
+                        logger.debug(f"Topic results sample:\n{topic_results.head()}")
 
-            # Combine results
-            combined_results = combine_results(model, conversation_results, spam_results, topic_results)
-            if combined_results:
-                # Add model category
-                if model in PRIMARY_MODELS:
-                    combined_results['category'] = 'Primary Recommendation'
-                else:
-                    combined_results['category'] = 'Alternative Option'
+                    # Combine results
+                    combined_results = combine_results(model, conversation_results, spam_results, topic_results)
+                    if combined_results:
+                        # Add model category
+                        if model in PRIMARY_MODELS:
+                            combined_results['category'] = 'Primary Recommendation'
+                        else:
+                            combined_results['category'] = 'Alternative Option'
 
-                all_results.append(combined_results)
-                logger.info(f"\nResults for {model}:")
-                logger.info(combined_results)
+                        all_results.append(combined_results)
+                        logger.info(f"\nResults for {model}:")
+                        logger.info(combined_results)
+        except Exception as e:
+            logger.error(f"Error testing model {model}: {e}")
+            logger.error(traceback.format_exc())
 
         time.sleep(5)  # Pause between models
 
-    # Restore the original config
-    shutil.copy2(BACKUP_CONFIG, CONFIG_PATH)
-    logger.info(f"Original config restored from {BACKUP_CONFIG}")
+    try:
+        # Restore the original config
+        shutil.copy2(BACKUP_CONFIG, CONFIG_PATH)
+        logger.info(f"Original config restored from {BACKUP_CONFIG}")
 
-    # Save combined results
-    if all_results:
-        final_df = pd.DataFrame(all_results)
-        final_df.to_csv(RESULTS_FILE, index=False)
-        logger.info(f"\nFinal comprehensive results saved to {RESULTS_FILE}")
+        # Save combined results
+        if all_results:
+            final_df = pd.DataFrame(all_results)
+            final_df.to_csv(RESULTS_FILE, index=False)
+            logger.info(f"\nFinal comprehensive results saved to {RESULTS_FILE}")
 
-        # Print summary focusing on ARI score (conversation clustering)
-        logger.info("\n===== MODEL CONVERSATION CLUSTERING SUMMARY =====")
-        if 'ari_score' in final_df.columns:
-            sorted_results = final_df.sort_values(by='ari_score', ascending=False)
-            summary_columns = ['model', 'ari_score', 'messages_processed', 'category']
-            columns_to_show = [col for col in summary_columns if col in sorted_results.columns]
-            logger.info(sorted_results[columns_to_show])
+            # Print summary focusing on ARI score (conversation clustering)
+            logger.info("\n===== MODEL CONVERSATION CLUSTERING SUMMARY =====")
+            if 'ari_score' in final_df.columns:
+                # Check if we have any actual ARI scores
+                if final_df['ari_score'].notna().any():
+                    sorted_results = final_df.sort_values(by='ari_score', ascending=False)
+                    summary_columns = ['model', 'ari_score', 'messages_processed', 'category']
+                    columns_to_show = [col for col in summary_columns if col in sorted_results.columns]
+                    logger.info(sorted_results[columns_to_show])
 
-            # Find the best model
-            if not sorted_results.empty:
-                best_model = sorted_results.iloc[0]
-                logger.info(f"\n✅ BEST MODEL: {best_model['model']} with ARI score of {best_model['ari_score']:.3f}")
-                logger.info(f"   Improvement over baseline: {(best_model['ari_score'] - 0.219):.3f} points")
+                    # Find the best model
+                    best_model = sorted_results.iloc[0]
+                    logger.info(f"\n✅ BEST MODEL: {best_model['model']} with ARI score of {best_model['ari_score']:.3f}")
+                    logger.info(f"   Improvement over baseline: {(best_model['ari_score'] - 0.219):.3f} points")
+                else:
+                    logger.info("No valid ARI scores found in results")
+            else:
+                logger.info("No ARI scores column in results")
         else:
-            logger.info("No ARI scores available in results")
-    else:
-        logger.error("No results were collected")
+            logger.error("No results were collected")
+    except Exception as e:
+        logger.error(f"Error in summary generation: {e}")
+        logger.error(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
