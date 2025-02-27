@@ -64,14 +64,26 @@ def pull_model(model_name):
         return False
 
 def run_model_test(model_name):
-    """Run the model test without modifying config."""
+    """Run the model test by modifying the config file."""
     logger.info(f"Running test with model: {model_name}...")
     try:
-        # Use command line parameter instead of modifying config
-        cmd = ["python", "open_source_examples/model_playground.py", DATA_PATH, "--model", model_name]
+        # First, load the current config
+        with open(CONFIG_PATH, 'r') as f:
+            import yaml
+            config = yaml.safe_load(f)
+
+        # Update the model name in the config
+        config['model']['name'] = model_name.split(':')[0]  # Remove tag if present
+
+        # Write the updated config back
+        with open(CONFIG_PATH, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        # Run the model playground with the updated config
+        cmd = ["python", "open_source_examples/model_playground.py", DATA_PATH]
         subprocess.run(cmd, check=True)
         return True
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         logger.error(f"Error running model {model_name}: {e}")
         return False
 
