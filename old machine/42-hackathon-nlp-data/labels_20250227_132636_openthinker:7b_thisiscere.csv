@@ -1,0 +1,20 @@
+message_id,conversation_id,topic,timestamp,labeler_id,confidence
+71958624,1,Alerts and Promotions,2023-03-24 02:05:49,openthinker:7b,0.9
+71958625,1,Alerts and Promotions,2023-03-24 02:22:38,openthinker:7b,0.9
+71958626,1,Alerts and Promotions,2023-03-24 02:30:26,openthinker:7b,0.9
+71958621,2,Airdrop Participation Request,2023-03-24 01:18:18,openthinker:7b,0.85
+71958622,2,Airdrop Participation Request,2023-03-24 01:23:03,openthinker:7b,0.85
+71958623,2,Airdrop Participation Request,2023-03-24 01:30:15,openthinker:7b,0.85
+71958627,3,Token Distribution Alert,2023-03-24 02:45:03,openthinker:7b,0.95
+<|end_of_thought|>,,,,openthinker:7b,
+<|begin_of_solution|>,,,,openthinker:7b,
+message_id,conversation_id,topic,timestamp,openthinker:7b,confidence
+71958624,1,Alerts and Promotions,2023-03-24 02:05:49,openthinker:7b,0.9
+71958625,1,Alerts and Promotions,2023-03-24 02:22:38,openthinker:7b,0.9
+71958626,1,Alerts and Promotions,2023-03-24 02:30:26,openthinker:7b,0.9
+71958621,2,Airdrop Participation Request,2023-03-24 01:18:18,openthinker:7b,0.85
+71958622,2,Airdrop Participation Request,2023-03-24 01:23:03,openthinker:7b,0.85
+71958623,2,Airdrop Participation Request,2023-03-24 01:30:15,openthinker:7b,0.85
+71958627,3,Token Distribution Alert,2023-03-24 02:45:03,openthinker:7b,0.95
+<|end_of_solution|>,,,,openthinker:7b,
+

@@ -272,8 +272,8 @@ This table shows that all models perform well at topic labeling, with GPT-4 achi
   python conversation_metrics.py data/groups/thisiscere
   ```
 
-  This will generate a CSV file with the performance metrics for the model predictions. It will take into account several reference models that have been already evaluated on the same data (GPT-4o, Claude 3.5, DeepSeek V3), as well as the model you've just run (Mistral 7B). 
-  
+  This will generate a CSV file with the performance metrics for the model predictions. It will take into account several reference models that have been already evaluated on the same data (GPT-4o, Claude 3.5, DeepSeek V3), as well as the model you've just run (Mistral 7B).
+
   To calculate the metrics, the script "looks at":
   * what labels all the models generated (in the directory associated with the community), for example:
     - `data/groups/thisiscere/labels_20250131_143535_gpt4o_thisiscere.csv`
@@ -282,11 +282,11 @@ This table shows that all models perform well at topic labeling, with GPT-4 achi
     - `data/groups/thisiscere/labels_20250225_202230_mistral7b_thisiscere.csv`
   * what the labels are for the ground truth (manually labelled by a human):
     - `data/groups/thisiscere/GT_conversations_thisiscere.csv`
-  
+
   and then calculates the metrics based on that.
-  
+
   The big picture understanding you need to have is, the closer the model labels are to the ground truth, the better the model is. The perfect score is 1, and the worst score is -1.
-  
+
   If you want to understand this evaluation on a deeper level, you can read more about the metrics in the [Knowledge Base](#useful-links).
 
   | Model | ARI Score (-1 to 1) | Messages Processed | Notes |
@@ -300,7 +300,7 @@ This table shows that all models perform well at topic labeling, with GPT-4 achi
   **Now you can see how the open source, locally deployed model performs against the big players 🏆 (GPT-4o, Claude 3.5, DeepSeek V3). As you can see, there's quite a performance gap - the ARI score for the smaller model is 0.219, while the big players are around 0.865 (with 1 being the perfect score).**
 
   **Your focus and core task is to try to close this gap 🎯 by experimenting with different models, different parameters, different system prompts, etc.**
-  
+
   **Now that you understand this context, you can start experimenting! Feel free to jump straight into step number 4, referenced here: [Step 4: Experiment with different models](#step-4-experiment-with-different-models)**
 
 </details>
@@ -409,7 +409,7 @@ The quality of conversation clustering is evaluated using the Adjusted Rand Inde
      - Ground Truth pairs in same conversation:
        * (msg1,msg2), (msg1,msg4), (msg2,msg4)  # Group 1
        * (msg3,msg5)                            # Group 2
-     
+
      - Model Output pairs in same conversation:
        * (msg1,msg2)                           # Group 100
        * (msg3,msg5)                           # Group 101
