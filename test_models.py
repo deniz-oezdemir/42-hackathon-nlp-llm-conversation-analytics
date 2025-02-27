@@ -72,12 +72,31 @@ def run_model_test(model_name):
             import yaml
             config = yaml.safe_load(f)
 
+        # Extract base model name without tag
+        base_model_name = model_name.split(':')[0]
+
         # Update the model name in the config
-        config['model']['name'] = model_name.split(':')[0]  # Remove tag if present
+        config['model']['name'] = base_model_name
 
         # Write the updated config back
         with open(CONFIG_PATH, 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
+
+        # Verify model is available in Ollama
+        try:
+            # List available models
+            result = subprocess.run(["ollama", "list"], stdout=subprocess.PIPE, text=True)
+            models_output = result.stdout
+
+            # Check if model is in the list
+            if base_model_name not in models_output:
+                logger.warning(f"Model {base_model_name} not found in Ollama list after pulling. Double-checking...")
+                # Try listing as original name with tags
+                if model_name not in models_output:
+                    logger.error(f"Model not found in Ollama after pulling. Available models:\n{models_output}")
+                    return False
+        except Exception as e:
+            logger.warning(f"Couldn't verify model availability: {e}")
 
         # Run the model playground with the updated config
         cmd = ["python", "open_source_examples/model_playground.py", DATA_PATH]
@@ -168,34 +187,43 @@ def combine_results(model_name, conversation_df, spam_df, topic_df):
     """Combine results from all evaluations for a model."""
     results = {"model": model_name}
 
+    # Extract base model name for matching
+    base_model_name = model_name.split(':')[0]
+
     # Extract conversation metrics
     if conversation_df is not None:
-        model_conv_results = conversation_df[conversation_df['model'].str.contains(model_name.split(':')[0], case=False)]
-        if not model_conv_results.empty:
-            results["ari_score"] = model_conv_results['ari'].values[0]
-            results["messages_processed"] = model_conv_results['n_messages'].values[0]
+        # Safe filtering - check if column exists and is string type first
+        if 'model' in conversation_df.columns and conversation_df['model'].dtype == 'object':
+            model_conv_results = conversation_df[conversation_df['model'].str.contains(base_model_name, case=False, na=False)]
+            if not model_conv_results.empty:
+                results["ari_score"] = model_conv_results['ari'].values[0]
+                results["messages_processed"] = model_conv_results['n_messages'].values[0]
+        else:
+            logger.warning(f"Couldn't filter conversation DataFrame for model {base_model_name}")
 
-    # Extract spam metrics
+    # Extract spam metrics - similar safe filtering for other DataFrames
     if spam_df is not None:
-        model_spam_results = spam_df[spam_df['model'].str.contains(model_name.split(':')[0], case=False)]
-        if not model_spam_results.empty:
-            results["spam_accuracy"] = model_spam_results['accuracy'].values[0]
-            results["spam_precision"] = model_spam_results['precision'].values[0]
-            results["spam_recall"] = model_spam_results['recall'].values[0]
-            results["spam_f1"] = model_spam_results['f1'].values[0]
+        if 'model' in spam_df.columns and spam_df['model'].dtype == 'object':
+            model_spam_results = spam_df[spam_df['model'].str.contains(base_model_name, case=False, na=False)]
+            if not model_spam_results.empty:
+                results["spam_accuracy"] = model_spam_results['accuracy'].values[0]
+                results["spam_precision"] = model_spam_results['precision'].values[0]
+                results["spam_recall"] = model_spam_results['recall'].values[0]
+                results["spam_f1"] = model_spam_results['f1'].values[0]
 
-    # Extract topic metrics
+    # Extract topic metrics with same safe filtering approach
     if topic_df is not None:
-        model_topic_results = topic_df[
-            (topic_df['model'].str.contains(model_name.split(':')[0], case=False)) &
-            (topic_df['topic'] == 'AVERAGE')
-        ]
-        if not model_topic_results.empty:
-            results["topic_info_density"] = model_topic_results['information_density'].values[0]
-            results["topic_redundancy"] = model_topic_results['redundancy'].values[0]
-            results["topic_relevance"] = model_topic_results['relevance'].values[0]
-            results["topic_efficiency"] = model_topic_results['efficiency'].values[0]
-            results["topic_overall"] = model_topic_results['overall'].values[0]
+        if 'model' in topic_df.columns and topic_df['model'].dtype == 'object':
+            model_topic_results = topic_df[
+                (topic_df['model'].str.contains(base_model_name, case=False, na=False)) &
+                (topic_df['topic'] == 'AVERAGE')
+            ]
+            if not model_topic_results.empty:
+                results["topic_info_density"] = model_topic_results['information_density'].values[0]
+                results["topic_redundancy"] = model_topic_results['redundancy'].values[0]
+                results["topic_relevance"] = model_topic_results['relevance'].values[0]
+                results["topic_efficiency"] = model_topic_results['efficiency'].values[0]
+                results["topic_overall"] = model_topic_results['overall'].values[0]
 
     return results
 
